@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const puppeteer = require('puppeteer');
-const { JSDOM } = require('jsdom');
+const { JSDOM, VirtualConsole } = require('jsdom');
 const { Readability } = require('@mozilla/readability');
 
 // ==========================================
@@ -18,8 +18,24 @@ const CONFIG = {
 // ==========================================
 
 function createCleanDom(rawHtml, url) {
-  const dom = new JSDOM(rawHtml, { url: url });
-  // Readabilityはscript/style等を自動除去しますが、念のため
+  // --- 追加: ログ抑制用の仮想コンソール設定 ---
+  const virtualConsole = new VirtualConsole();
+  
+  // CSSパースエラーなどは無視し、それ以外は表示する
+  virtualConsole.on("jsdomError", (err) => {
+    if (err.message.includes("Could not parse CSS stylesheet")) {
+      return; // 無視
+    }
+    console.error(err);
+  });
+  // ----------------------------------------
+
+  // 変更: virtualConsole オプションを追加
+  const dom = new JSDOM(rawHtml, { 
+    url: url, 
+    virtualConsole: virtualConsole 
+  });
+
   const doc = dom.window.document;
   const elements = doc.querySelectorAll('script, style, noscript, iframe, svg, form, footer, nav, aside');
   elements.forEach(el => el.remove());
