@@ -101,14 +101,19 @@ async function extract(url, debugDir = null) {
     };
 
     // =========================================================
-    // 追加: デバッグ出力 (タイトルと本文のみをファイルに保存)
+    // 追加: デバッグ出力 (タイトルと本文を別ファイルに保存)
     // =========================================================
     if (debugDir) {
-      const debugFilePath = path.join(debugDir, 'debug_content.txt');
-      const fileContent = `Title: ${result.title}\n\n${result.content}`;
+      // タイトルファイルの保存
+      const titlePath = path.join(debugDir, 'title.txt');
+      fs.writeFileSync(titlePath, result.title);
       
-      fs.writeFileSync(debugFilePath, fileContent);
-      console.error(`[Debug] Saved title and content to: ${debugFilePath}`);
+      // 本文ファイルの保存
+      const contentPath = path.join(debugDir, 'content.txt');
+      fs.writeFileSync(contentPath, result.content);
+
+      console.error(`[Debug] Saved title to: ${titlePath}`);
+      console.error(`[Debug] Saved content to: ${contentPath}`);
     }
 
     return result;
