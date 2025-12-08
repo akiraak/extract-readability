@@ -3,14 +3,15 @@
 const puppeteer = require('puppeteer');
 const { JSDOM, VirtualConsole } = require('jsdom');
 const { Readability } = require('@mozilla/readability');
+const fs = require('fs');
+const path = require('path');
 
 // ==========================================
 // 設定 (Configuration)
 // ==========================================
 const CONFIG = {
-  // ブラウザのふりをする（ヘッドレスモードの検出回避のため少し古めのChrome設定などを混ぜることも有効）
   USER_AGENT: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  TIMEOUT_MS: 60000, // 念のため60秒に延長
+  TIMEOUT_MS: 60000,
 };
 
 // ==========================================
@@ -18,19 +19,15 @@ const CONFIG = {
 // ==========================================
 
 function createCleanDom(rawHtml, url) {
-  // --- 追加: ログ抑制用の仮想コンソール設定 ---
   const virtualConsole = new VirtualConsole();
   
-  // CSSパースエラーなどは無視し、それ以外は表示する
   virtualConsole.on("jsdomError", (err) => {
     if (err.message.includes("Could not parse CSS stylesheet")) {
-      return; // 無視
+      return; 
     }
     console.error(err);
   });
-  // ----------------------------------------
 
-  // 変更: virtualConsole オプションを追加
   const dom = new JSDOM(rawHtml, { 
     url: url, 
     virtualConsole: virtualConsole 
@@ -42,24 +39,30 @@ function createCleanDom(rawHtml, url) {
   return dom;
 }
 
-async function extract(url) {
+/**
+ * 記事を抽出する
+ * @param {string} url 
+ * @param {string|null} debugDir デバッグ出力先 (指定がない場合はnull)
+ */
+async function extract(url, debugDir = null) {
   let browser;
   try {
+    // デバッグディレクトリの準備
+    if (debugDir && !fs.existsSync(debugDir)) {
+      fs.mkdirSync(debugDir, { recursive: true });
+    }
+
     console.error(`[Browser] Launching...`);
     
     browser = await puppeteer.launch({ 
         headless: "new", 
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] // メモリ不足対策も追加
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
     const page = await browser.newPage();
     
-    // 【対策1】不要なリソース（画像・CSS・フォント・メディア）をブロックして高速化
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const resourceType = req.resourceType();
-      // 'document' と 'script' (SPA対策) 以外はブロック
-      // ※ サイトによってはscriptをブロックすると動かないため許可していますが、
-      //    それでも遅い場合は 'script' もブロックリストに入れて試してください。
       if (['image', 'stylesheet', 'font', 'media', 'imageset', 'object', 'beacon', 'csp_report'].includes(resourceType)) {
         req.abort();
       } else {
@@ -71,16 +74,12 @@ async function extract(url) {
 
     console.error(`[Browser] Fetching: ${url}...`);
     
-    // 【対策2】待機条件を 'domcontentloaded' に緩和
-    // これにより、画像や広告の読み込み完了を待たずに次に進みます
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT_MS });
 
-    // 一部のSPA（Reactなど）はHTMLロード直後は空っぽの場合があるので、少しだけ待つ（保険）
-    // 必要なければ削除可。Yahoo Finance等はこれで安定することが多い。
     try {
         await page.waitForSelector('body', { timeout: 5000 });
     } catch(e) {
-        // 無視して進む
+        // 無視
     }
 
     const rawHtml = await page.content();
@@ -101,6 +100,17 @@ async function extract(url) {
       url: url,
     };
 
+    // =========================================================
+    // 追加: デバッグ出力 (タイトルと本文のみをファイルに保存)
+    // =========================================================
+    if (debugDir) {
+      const debugFilePath = path.join(debugDir, 'debug_content.txt');
+      const fileContent = `Title: ${result.title}\n\n${result.content}`;
+      
+      fs.writeFileSync(debugFilePath, fileContent);
+      console.error(`[Debug] Saved title and content to: ${debugFilePath}`);
+    }
+
     return result;
 
   } catch (error) {
@@ -111,17 +121,30 @@ async function extract(url) {
 }
 
 // ==========================================
-// 実行判定
+// 実行判定 & 引数解析
 // ==========================================
 if (require.main === module) {
   (async () => {
-    const targetUrl = process.argv[2];
+    const args = process.argv.slice(2);
+    
+    // オプション(--out)以外の引数をURLとみなす
+    const targetUrl = args.find(arg => !arg.startsWith('-'));
+    
+    // --out または -o の後の値を取得
+    const outIndex = args.findIndex(arg => arg === '--out' || arg === '-o');
+    let debugDir = null;
+    if (outIndex !== -1 && args[outIndex + 1]) {
+      debugDir = args[outIndex + 1];
+    }
+
     if (!targetUrl) {
-      console.error('Usage: node extract.js <URL>');
+      console.error('Usage: node extract.js <URL> [--out <OUTPUT_DIR>]');
       process.exit(1);
     }
+
     try {
-      const result = await extract(targetUrl);
+      const result = await extract(targetUrl, debugDir);
+      // 標準出力にはJSONを出す（パイプ処理などで使うため）
       console.log(JSON.stringify(result, null, 2));
     } catch (err) {
       console.error('Failed:', err.message);
