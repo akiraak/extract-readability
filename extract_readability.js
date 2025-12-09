@@ -137,7 +137,7 @@ if (require.main === module) {
   (async () => {
     const args = process.argv.slice(2);
 
-    // ★追加: 引数の内容を表示 (標準エラー出力に出すこと)
+    // 引数の内容を表示 (標準エラー出力に出すこと)
     console.error('--- [extract_readability.js] Received Args ---');
     console.error(args);
     console.error('----------------------------------------------');
@@ -152,10 +152,6 @@ if (require.main === module) {
     if (debugIndex !== -1 && args[debugIndex + 1]) {
       debugDir = args[debugIndex + 1];
     }
-
-    // パース結果も表示しておくと安心です
-    console.error(`[Debug] Target URL: ${targetUrl}`);
-    console.error(`[Debug] Debug Dir:  ${debugDir}`);
 
     if (!targetUrl) {
       console.error('Usage: node extract.js <URL> [--debug-dir <OUTPUT_DIR>]');
