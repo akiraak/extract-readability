@@ -27,7 +27,7 @@ const CONFIG = {
  */
 function createCleanDom(rawHtml, url) {
   const virtualConsole = new VirtualConsole();
-  
+
   // CSSパースエラーなどは抑制
   virtualConsole.on("jsdomError", (err) => {
     if (err.message.includes("Could not parse CSS stylesheet")) return; 
@@ -42,7 +42,7 @@ function createCleanDom(rawHtml, url) {
   const doc = dom.window.document;
   const elements = doc.querySelectorAll(CONFIG.REMOVE_SELECTORS);
   elements.forEach(el => el.remove());
-  
+
   return dom;
 }
 
@@ -58,7 +58,7 @@ async function fetchHtmlWithBrowser(url) {
 
   try {
     const page = await browser.newPage();
-    
+
     // リソースのブロック設定
     await page.setRequestInterception(true);
     page.on('request', (req) => {
@@ -153,15 +153,10 @@ async function extract(url, debugDir = null) {
  */
 function parseArgs() {
   const args = process.argv.slice(2);
-  
-  // デバッグ表示
-  console.error('--- [extract_readability.js] Received Args ---');
-  console.error(args);
-  console.error('----------------------------------------------');
 
   const targetUrl = args.find(arg => !arg.startsWith('-'));
   const debugIndex = args.findIndex(arg => arg === '--debug-dir' || arg === '-d');
-  
+
   let debugDir = null;
   if (debugIndex !== -1 && args[debugIndex + 1]) {
     debugDir = args[debugIndex + 1];
@@ -177,9 +172,6 @@ if (require.main === module) {
   (async () => {
     const { targetUrl, debugDir } = parseArgs();
 
-    console.error(`[Debug] Target URL: ${targetUrl}`);
-    console.error(`[Debug] Debug Dir:  ${debugDir}`);
-
     if (!targetUrl) {
       console.error('Usage: node extract.js <URL> [--debug-dir <OUTPUT_DIR>]');
       process.exit(1);
@@ -187,7 +179,8 @@ if (require.main === module) {
 
     try {
       const result = await extract(targetUrl, debugDir);
-      // JSON出力 (標準出力)
+
+      // 標準出力(stdout)にはJSONだけを出力する
       console.log(JSON.stringify(result, null, 2));
     } catch (err) {
       console.error('Failed:', err.message);
