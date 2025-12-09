@@ -12,19 +12,25 @@ const path = require('path');
 const CONFIG = {
   USER_AGENT: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   TIMEOUT_MS: 60000,
+  // 削除対象のセレクタを定義
+  REMOVE_SELECTORS: 'script, style, noscript, iframe, svg, form, footer, nav, aside',
+  // リソースブロック対象
+  BLOCK_RESOURCES: ['image', 'stylesheet', 'font', 'media', 'imageset', 'object', 'beacon', 'csp_report']
 };
 
 // ==========================================
-// 内部関数
+// ヘルパー関数群 (Helpers)
 // ==========================================
 
+/**
+ * HTMLから不要な要素を除去し、JSDOMオブジェクトを生成する
+ */
 function createCleanDom(rawHtml, url) {
   const virtualConsole = new VirtualConsole();
   
+  // CSSパースエラーなどは抑制
   virtualConsole.on("jsdomError", (err) => {
-    if (err.message.includes("Could not parse CSS stylesheet")) {
-      return; 
-    }
+    if (err.message.includes("Could not parse CSS stylesheet")) return; 
     console.error(err);
   });
 
@@ -34,36 +40,29 @@ function createCleanDom(rawHtml, url) {
   });
 
   const doc = dom.window.document;
-  const elements = doc.querySelectorAll('script, style, noscript, iframe, svg, form, footer, nav, aside');
+  const elements = doc.querySelectorAll(CONFIG.REMOVE_SELECTORS);
   elements.forEach(el => el.remove());
+  
   return dom;
 }
 
 /**
- * 記事を抽出する
- * @param {string} url 
- * @param {string|null} debugDir デバッグ出力先 (指定がない場合はnull)
+ * Puppeteerを使って指定URLのHTMLを取得する
  */
-async function extract(url, debugDir = null) {
-  let browser;
-  try {
-    // デバッグディレクトリの準備
-    if (debugDir && !fs.existsSync(debugDir)) {
-      fs.mkdirSync(debugDir, { recursive: true });
-    }
+async function fetchHtmlWithBrowser(url) {
+  console.error(`[Browser] Launching...`);
+  const browser = await puppeteer.launch({ 
+      headless: "new", 
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+  });
 
-    console.error(`[Browser] Launching...`);
-    
-    browser = await puppeteer.launch({ 
-        headless: "new", 
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
+  try {
     const page = await browser.newPage();
     
+    // リソースのブロック設定
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-      const resourceType = req.resourceType();
-      if (['image', 'stylesheet', 'font', 'media', 'imageset', 'object', 'beacon', 'csp_report'].includes(resourceType)) {
+      if (CONFIG.BLOCK_RESOURCES.includes(req.resourceType())) {
         req.abort();
       } else {
         req.continue();
@@ -73,19 +72,55 @@ async function extract(url, debugDir = null) {
     await page.setUserAgent(CONFIG.USER_AGENT);
 
     console.error(`[Browser] Fetching: ${url}...`);
-    
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT_MS });
 
-    try {
-        await page.waitForSelector('body', { timeout: 5000 });
-    } catch(e) {
-        // 無視
-    }
+    // bodyが表示されるまで待機（エラー時は無視して進む）
+    try { await page.waitForSelector('body', { timeout: 5000 }); } catch(e) {}
 
-    // 生のHTMLを取得
-    const rawHtml = await page.content();
+    return await page.content();
+
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * デバッグ用のファイル保存処理
+ */
+function saveDebugFiles(debugDir, rawHtml, result) {
+  if (!debugDir) return;
+
+  if (!fs.existsSync(debugDir)) {
+    fs.mkdirSync(debugDir, { recursive: true });
+  }
+
+  const artifacts = [
+    { name: 'original.html', content: rawHtml },
+    { name: 'title.txt',     content: result.title },
+    { name: 'content.txt',   content: result.content }
+  ];
+
+  artifacts.forEach(({ name, content }) => {
+    const filePath = path.join(debugDir, name);
+    fs.writeFileSync(filePath, content);
+    console.error(`[Debug] Saved ${name} to: ${filePath}`);
+  });
+}
+
+// ==========================================
+// メインロジック
+// ==========================================
+
+/**
+ * 記事抽出のメインフロー
+ */
+async function extract(url, debugDir = null) {
+  try {
+    // 1. ブラウザでHTMLを取得
+    const rawHtml = await fetchHtmlWithBrowser(url);
+
+    // 2. Readabilityで解析
     console.error('[Process] Parsing with Readability...');
-
     const dom = createCleanDom(rawHtml, url);
     const reader = new Readability(dom.window.document);
     const article = reader.parse();
@@ -101,57 +136,49 @@ async function extract(url, debugDir = null) {
       url: url,
     };
 
-    // =========================================================
-    // 追加: デバッグ出力 (HTML, タイトル, 本文を保存)
-    // =========================================================
+    // 3. デバッグ情報の保存
     if (debugDir) {
-      // 1. 元のHTMLを保存
-      const htmlPath = path.join(debugDir, 'original.html');
-      fs.writeFileSync(htmlPath, rawHtml);
-      console.error(`[Debug] Saved HTML to: ${htmlPath}`);
-
-      // 2. タイトルを保存
-      const titlePath = path.join(debugDir, 'title.txt');
-      fs.writeFileSync(titlePath, result.title);
-      console.error(`[Debug] Saved title to: ${titlePath}`);
-      
-      // 3. 本文を保存
-      const contentPath = path.join(debugDir, 'content.txt');
-      fs.writeFileSync(contentPath, result.content);
-      console.error(`[Debug] Saved content to: ${contentPath}`);
+      saveDebugFiles(debugDir, rawHtml, result);
     }
 
     return result;
 
   } catch (error) {
     throw error;
-  } finally {
-    if (browser) await browser.close();
   }
 }
 
+/**
+ * コマンドライン引数の解析
+ */
+function parseArgs() {
+  const args = process.argv.slice(2);
+  
+  // デバッグ表示
+  console.error('--- [extract_readability.js] Received Args ---');
+  console.error(args);
+  console.error('----------------------------------------------');
+
+  const targetUrl = args.find(arg => !arg.startsWith('-'));
+  const debugIndex = args.findIndex(arg => arg === '--debug-dir' || arg === '-d');
+  
+  let debugDir = null;
+  if (debugIndex !== -1 && args[debugIndex + 1]) {
+    debugDir = args[debugIndex + 1];
+  }
+
+  return { targetUrl, debugDir };
+}
+
 // ==========================================
-// 実行判定 & 引数解析
+// エントリーポイント
 // ==========================================
 if (require.main === module) {
   (async () => {
-    const args = process.argv.slice(2);
+    const { targetUrl, debugDir } = parseArgs();
 
-    // 引数の内容を表示 (標準エラー出力に出すこと)
-    console.error('--- [extract_readability.js] Received Args ---');
-    console.error(args);
-    console.error('----------------------------------------------');
-    
-    // オプション以外の引数をURLとみなす
-    const targetUrl = args.find(arg => !arg.startsWith('-'));
-    
-    // --debug-dir または -d の後の値を取得
-    const debugIndex = args.findIndex(arg => arg === '--debug-dir' || arg === '-d');
-    let debugDir = null;
-    
-    if (debugIndex !== -1 && args[debugIndex + 1]) {
-      debugDir = args[debugIndex + 1];
-    }
+    console.error(`[Debug] Target URL: ${targetUrl}`);
+    console.error(`[Debug] Debug Dir:  ${debugDir}`);
 
     if (!targetUrl) {
       console.error('Usage: node extract.js <URL> [--debug-dir <OUTPUT_DIR>]');
@@ -160,7 +187,7 @@ if (require.main === module) {
 
     try {
       const result = await extract(targetUrl, debugDir);
-      // 標準出力にはJSONを出す（パイプ処理などで使うため）
+      // JSON出力 (標準出力)
       console.log(JSON.stringify(result, null, 2));
     } catch (err) {
       console.error('Failed:', err.message);
