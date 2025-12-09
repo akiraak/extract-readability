@@ -82,6 +82,7 @@ async function extract(url, debugDir = null) {
         // 無視
     }
 
+    // 生のHTMLを取得
     const rawHtml = await page.content();
     console.error('[Process] Parsing with Readability...');
 
@@ -101,18 +102,22 @@ async function extract(url, debugDir = null) {
     };
 
     // =========================================================
-    // 追加: デバッグ出力 (タイトルと本文を別ファイルに保存)
+    // 追加: デバッグ出力 (HTML, タイトル, 本文を保存)
     // =========================================================
     if (debugDir) {
-      // タイトルファイルの保存
+      // 1. 元のHTMLを保存
+      const htmlPath = path.join(debugDir, 'original.html');
+      fs.writeFileSync(htmlPath, rawHtml);
+      console.error(`[Debug] Saved HTML to: ${htmlPath}`);
+
+      // 2. タイトルを保存
       const titlePath = path.join(debugDir, 'title.txt');
       fs.writeFileSync(titlePath, result.title);
+      console.error(`[Debug] Saved title to: ${titlePath}`);
       
-      // 本文ファイルの保存
+      // 3. 本文を保存
       const contentPath = path.join(debugDir, 'content.txt');
       fs.writeFileSync(contentPath, result.content);
-
-      console.error(`[Debug] Saved title to: ${titlePath}`);
       console.error(`[Debug] Saved content to: ${contentPath}`);
     }
 
@@ -131,19 +136,29 @@ async function extract(url, debugDir = null) {
 if (require.main === module) {
   (async () => {
     const args = process.argv.slice(2);
+
+    // ★追加: 引数の内容を表示 (標準エラー出力に出すこと)
+    console.error('--- [extract_readability.js] Received Args ---');
+    console.error(args);
+    console.error('----------------------------------------------');
     
-    // オプション(--out)以外の引数をURLとみなす
+    // オプション以外の引数をURLとみなす
     const targetUrl = args.find(arg => !arg.startsWith('-'));
     
-    // --out または -o の後の値を取得
-    const outIndex = args.findIndex(arg => arg === '--out' || arg === '-o');
+    // --debug-dir または -d の後の値を取得
+    const debugIndex = args.findIndex(arg => arg === '--debug-dir' || arg === '-d');
     let debugDir = null;
-    if (outIndex !== -1 && args[outIndex + 1]) {
-      debugDir = args[outIndex + 1];
+    
+    if (debugIndex !== -1 && args[debugIndex + 1]) {
+      debugDir = args[debugIndex + 1];
     }
 
+    // パース結果も表示しておくと安心です
+    console.error(`[Debug] Target URL: ${targetUrl}`);
+    console.error(`[Debug] Debug Dir:  ${debugDir}`);
+
     if (!targetUrl) {
-      console.error('Usage: node extract.js <URL> [--out <OUTPUT_DIR>]');
+      console.error('Usage: node extract.js <URL> [--debug-dir <OUTPUT_DIR>]');
       process.exit(1);
     }
 
