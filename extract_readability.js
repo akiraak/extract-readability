@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
 const puppeteer = require('puppeteer');
-const { JSDOM, VirtualConsole } = require('jsdom');
-const { Readability } = require('@mozilla/readability');
 const fs = require('fs');
 const path = require('path');
 
@@ -12,54 +10,32 @@ const path = require('path');
 const CONFIG = {
   USER_AGENT: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   TIMEOUT_MS: 60000,
-  // 削除対象のセレクタを定義
+  // 削除対象のセレクタ (ブラウザ内で削除実行)
   REMOVE_SELECTORS: 'script, style, noscript, iframe, svg, form, footer, nav, aside',
   // リソースブロック対象
   BLOCK_RESOURCES: ['image', 'stylesheet', 'font', 'media', 'imageset', 'object', 'beacon', 'csp_report']
 };
 
 // ==========================================
-// ヘルパー関数群 (Helpers)
+// メインロジック
 // ==========================================
 
 /**
- * HTMLから不要な要素を除去し、JSDOMオブジェクトを生成する
+ * 記事抽出のメインフロー (Puppeteer内で完結)
  */
-function createCleanDom(rawHtml, url) {
-  const virtualConsole = new VirtualConsole();
-
-  // CSSパースエラーなどは抑制
-  virtualConsole.on("jsdomError", (err) => {
-    if (err.message.includes("Could not parse CSS stylesheet")) return; 
-    console.error(err);
-  });
-
-  const dom = new JSDOM(rawHtml, { 
-    url: url, 
-    virtualConsole: virtualConsole 
-  });
-
-  const doc = dom.window.document;
-  const elements = doc.querySelectorAll(CONFIG.REMOVE_SELECTORS);
-  elements.forEach(el => el.remove());
-
-  return dom;
-}
-
-/**
- * Puppeteerを使って指定URLのHTMLを取得する
- */
-async function fetchHtmlWithBrowser(url) {
+async function extract(url, debugDir = null) {
   console.error(`[Browser] Launching...`);
-  const browser = await puppeteer.launch({ 
-      headless: "new", 
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+  
+  // ブラウザ起動
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
   });
 
   try {
     const page = await browser.newPage();
 
-    // リソースのブロック設定
+    // 1. リソースのブロック設定 (高速化)
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       if (CONFIG.BLOCK_RESOURCES.includes(req.resourceType())) {
@@ -71,14 +47,62 @@ async function fetchHtmlWithBrowser(url) {
 
     await page.setUserAgent(CONFIG.USER_AGENT);
 
+    // 2. ページ取得
     console.error(`[Browser] Fetching: ${url}...`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: CONFIG.TIMEOUT_MS });
 
-    // bodyが表示されるまで待機（エラー時は無視して進む）
-    try { await page.waitForSelector('body', { timeout: 5000 }); } catch(e) {}
+    // bodyが表示されるまで待機（念のため）
+    try { await page.waitForSelector('body', { timeout: 5000 }); } catch (e) {}
 
-    return await page.content();
+    // 3. Readability.js ライブラリをブラウザに注入
+    // node_modulesの中からライブラリのパスを解決して読み込ませる
+    const readabilityPath = require.resolve('@mozilla/readability/Readability.js');
+    await page.addScriptTag({ path: readabilityPath });
 
+    console.error('[Process] Parsing with Readability (inside Browser)...');
+
+    // 4. ブラウザ内でパースを実行
+    const result = await page.evaluate((removeSelectors) => {
+      // 事前のDOMお掃除
+      if (removeSelectors) {
+        document.querySelectorAll(removeSelectors).forEach(el => el.remove());
+      }
+
+      // Readability実行
+      // @ts-ignore (ブラウザ内にはReadabilityクラスが存在する)
+      const reader = new Readability(document.cloneNode(true));
+      const article = reader.parse();
+
+      if (!article) return null;
+
+      return {
+        title: article.title,
+        content: article.textContent.trim(),
+        rawContent: document.documentElement.outerHTML // デバッグ用にHTML全体も取得可能にしておく
+      };
+    }, CONFIG.REMOVE_SELECTORS);
+
+    if (!result) {
+      throw new Error('Failed to parse article content.');
+    }
+
+    // 整形
+    const output = {
+      title: result.title,
+      content: result.content,
+      domain: new URL(url).hostname,
+      url: url,
+    };
+
+    // 5. デバッグ情報の保存
+    if (debugDir) {
+      saveDebugFiles(debugDir, result.rawContent, output);
+    }
+
+    return output;
+
+  } catch (error) {
+    throw error;
   } finally {
     await browser.close();
   }
@@ -102,50 +126,9 @@ function saveDebugFiles(debugDir, rawHtml, result) {
 
   artifacts.forEach(({ name, content }) => {
     const filePath = path.join(debugDir, name);
-    fs.writeFileSync(filePath, content);
+    fs.writeFileSync(filePath, content || '');
     console.error(`[Debug] Saved ${name} to: ${filePath}`);
   });
-}
-
-// ==========================================
-// メインロジック
-// ==========================================
-
-/**
- * 記事抽出のメインフロー
- */
-async function extract(url, debugDir = null) {
-  try {
-    // 1. ブラウザでHTMLを取得
-    const rawHtml = await fetchHtmlWithBrowser(url);
-
-    // 2. Readabilityで解析
-    console.error('[Process] Parsing with Readability...');
-    const dom = createCleanDom(rawHtml, url);
-    const reader = new Readability(dom.window.document);
-    const article = reader.parse();
-
-    if (!article) {
-      throw new Error('Failed to parse article content.');
-    }
-
-    const result = {
-      title: article.title,
-      content: article.textContent.trim(),
-      domain: new URL(url).hostname,
-      url: url,
-    };
-
-    // 3. デバッグ情報の保存
-    if (debugDir) {
-      saveDebugFiles(debugDir, rawHtml, result);
-    }
-
-    return result;
-
-  } catch (error) {
-    throw error;
-  }
 }
 
 /**
@@ -153,7 +136,6 @@ async function extract(url, debugDir = null) {
  */
 function parseArgs() {
   const args = process.argv.slice(2);
-
   const targetUrl = args.find(arg => !arg.startsWith('-'));
   const debugIndex = args.findIndex(arg => arg === '--debug-dir' || arg === '-d');
 
@@ -179,7 +161,6 @@ if (require.main === module) {
 
     try {
       const result = await extract(targetUrl, debugDir);
-
       // 標準出力(stdout)にはJSONだけを出力する
       console.log(JSON.stringify(result, null, 2));
     } catch (err) {

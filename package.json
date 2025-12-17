@@ -3,12 +3,10 @@
   "version": "1.0.0",
   "description": "",
   "main": "extract_readability.js",
-  "type": "commonjs", 
-  
+  "type": "commonjs",
   "bin": {
     "extract-readability": "./extract_readability.js"
   },
-
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -25,7 +23,6 @@
   "homepage": "https://github.com/akiraak/extract-readability#readme",
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
-    "jsdom": "^27.2.0",
     "puppeteer": "^24.32.0"
   }
 }
