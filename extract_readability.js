@@ -11,7 +11,8 @@ const CONFIG = {
   USER_AGENT: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   TIMEOUT_MS: 60000,
   // 削除対象のセレクタ (ブラウザ内で削除実行)
-  REMOVE_SELECTORS: 'script, style, noscript, iframe, svg, form, footer, nav, aside',
+  //REMOVE_SELECTORS: 'script, style, noscript, iframe, svg, form, footer, nav, aside',
+  REMOVE_SELECTORS: 'script, style, noscript, iframe, svg, form, footer, nav, aside, figcaption, figure, .caption',
   // リソースブロック対象
   BLOCK_RESOURCES: ['image', 'stylesheet', 'font', 'media', 'imageset', 'object', 'beacon', 'csp_report']
 };
